@@ -59,3 +59,11 @@ jobs:
           name: jp_subtitle-windows
           path: dist/jp_subtitle
           retention-days: 90
+
+      # 라이브러리가 그대로일 때는 exe 하나만 바꿔도 새 코드가 적용된다 (작은 업데이트용)
+      - name: Upload exe only (update)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jp_subtitle-exe-only
+          path: dist/jp_subtitle/jp_subtitle.exe
+          retention-days: 90

@@ -22,6 +22,9 @@
 
 그래픽카드를 쓸 수 없는 상황이면 자동으로 CPU 모드로 바뀌고, 자막 창에 안내가 뜹니다.
 
+**업데이트할 때**는 1GB가 넘는 전체를 다시 받을 필요 없이 `jp_subtitle-exe-only`만 받아서
+기존 폴더의 `jp_subtitle.exe`를 덮어쓰면 됩니다 (`config.toml`은 그대로 유지됩니다).
+
 ## 1. 직접 설치 (Python으로 실행)
 
 1. **Python 3.11 이상** 설치: <https://www.python.org/downloads/> (설치할 때 "Add python.exe to PATH" 체크)
@@ -86,6 +89,7 @@ python -m jp_subtitle --input sample.wav    :: 스피커 대신 wav 파일로 �
 |---|---|
 | 자막 창에 "CPU 로 실행 중" 안내 | `pip install -r requirements.txt`를 다시 실행하고 그래픽 드라이버를 업데이트하세요. 그래도 안 되면 `[whisper] device = "cpu"`, `compute_type = "int8"`, `model = "small"`로 바꾸세요(느리지만 동작합니다). |
 | 그래픽카드 메모리 부족 | `model = "medium"` 또는 `"small"` |
+| 자막이 전혀 안 뜸 | 검은 창에 10초마다 나오는 `[캡처] ...` 줄을 확인하세요. "소리가 들어오지 않았습니다"라면 소리가 다른 장치로 나가고 있는 것이니 Windows 기본 출력 장치나 `[audio] device` 를 확인하세요. |
 | 잡음이 자막으로 뜸 | `[segmenter] vad_threshold`를 0.6~0.7로 올리세요 |
 | 문장이 중간에 자주 끊김 | `silence_end_sec`를 0.8~1.0으로 올리세요 |
 | 자막이 늦게 뜸 | `silence_end_sec`를 0.4~0.5로 내리고 `beam_size`를 1~2로 낮추세요 |

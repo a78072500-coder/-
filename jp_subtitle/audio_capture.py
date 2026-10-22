@@ -10,20 +10,59 @@ from pathlib import Path
 from typing import Iterator
 
 import numpy as np
-from scipy.signal import resample_poly
+from scipy.signal import firwin, lfilter, lfilter_zi, resample_poly
 
 SAMPLE_RATE = 16000
 BLOCK_SAMPLES = 512  # 32ms, silero VAD 프레임 크기
 
 
 def to_mono_16k(data: np.ndarray, rate: int, channels: int) -> np.ndarray:
-    """인터리브된 float32 PCM 을 16kHz 모노로 변환한다."""
+    """인터리브된 float32 PCM 을 16kHz 모노로 변환한다 (한 번에 전체를 변환할 때)."""
     if channels > 1:
         data = data.reshape(-1, channels).mean(axis=1)
     if rate != SAMPLE_RATE:
         g = gcd(rate, SAMPLE_RATE)
         data = resample_poly(data, SAMPLE_RATE // g, rate // g)
     return data.astype(np.float32, copy=False)
+
+
+class StreamResampler:
+    """작은 조각으로 계속 들어오는 소리를 끊김 없이 16kHz 모노로 바꾼다.
+
+    조각마다 따로 리샘플하면 경계마다 잡음이 생기므로, 저역통과 필터 상태와
+    샘플 위치를 다음 조각으로 이어간다.
+    """
+
+    def __init__(self, rate: int, channels: int):
+        self.channels = channels
+        self.step = rate / SAMPLE_RATE  # 출력 한 샘플마다 입력에서 이동할 거리
+        self._next = 0.0    # 다음 출력 샘플의 입력 위치 (처음부터 센 절대 위치)
+        self._offset = 0    # 이번 조각 첫 샘플의 절대 위치
+        self._last = 0.0    # 앞 조각의 마지막 샘플 (경계에서 보간용)
+        if rate > SAMPLE_RATE:
+            self._taps = firwin(63, 7600, fs=rate)  # 8kHz 위 성분을 걸러 앨리어싱 방지
+            self._zi = lfilter_zi(self._taps, 1.0) * 0.0
+        else:
+            self._taps = None
+
+    def process(self, data: np.ndarray) -> np.ndarray:
+        x = data.astype(np.float64)
+        if self.channels > 1:
+            x = x.reshape(-1, self.channels).mean(axis=1)
+        if not len(x):
+            return np.zeros(0, dtype=np.float32)
+        if self._taps is not None:
+            x, self._zi = lfilter(self._taps, 1.0, x, zi=self._zi)
+        # xx[i] 의 절대 위치는 offset - 1 + i
+        xx = np.concatenate([[self._last], x])
+        end = self._offset + len(x) - 1  # 이번 조각의 마지막 절대 위치
+        positions = np.arange(self._next, end, self.step)
+        out = np.interp(positions - (self._offset - 1), np.arange(len(xx)), xx)
+        if len(positions):
+            self._next = positions[-1] + self.step
+        self._offset += len(x)
+        self._last = x[-1]
+        return out.astype(np.float32)
 
 
 class _Rechunker:
@@ -37,6 +76,28 @@ class _Rechunker:
         while len(self._buf) >= BLOCK_SAMPLES:
             yield self._buf[:BLOCK_SAMPLES]
             self._buf = self._buf[BLOCK_SAMPLES:]
+
+
+class _LevelMeter:
+    """10초마다 들어온 소리 크기를 콘솔에 보여준다 (소리가 안 잡힐 때 원인 확인용)."""
+
+    INTERVAL = 10.0
+
+    def __init__(self) -> None:
+        self._peak = 0.0
+        self._samples = 0
+
+    def add(self, audio: np.ndarray) -> None:
+        if len(audio):
+            self._peak = max(self._peak, float(np.max(np.abs(audio))))
+        self._samples += len(audio)
+        if self._samples >= self.INTERVAL * SAMPLE_RATE:
+            if self._peak < 0.003:
+                print("[캡처] 최근 10초 동안 소리가 들어오지 않았습니다 (재생 장치 확인)")
+            else:
+                print(f"[캡처] 최근 10초 최대 음량 {min(100, self._peak * 100):.0f}%")
+            self._peak = 0.0
+            self._samples = 0
 
 
 class FileSource:
@@ -125,33 +186,40 @@ class LoopbackSource:
         dev = self._find_device(p)
         rate = int(dev["defaultSampleRate"])
         channels = int(dev["maxInputChannels"])
-        frames = rate // 10  # 100ms 씩 읽는다
         stream = p.open(
             format=pyaudio.paFloat32,
             channels=channels,
             rate=rate,
             input=True,
             input_device_index=dev["index"],
-            frames_per_buffer=frames,
+            frames_per_buffer=rate // 50,  # 20ms
         )
         print(f"[캡처] {dev['name']} ({rate}Hz, {channels}ch)")
+        resampler = StreamResampler(rate, channels)
         rechunker = _Rechunker()
-        silence = np.zeros(SAMPLE_RATE // 10, dtype=np.float32)
+        meter = _LevelMeter()
         last_data = time.monotonic()
         try:
             while not self._stop.is_set():
-                if stream.get_read_available() >= frames:
-                    raw = stream.read(frames, exception_on_overflow=False)
-                    data = np.frombuffer(raw, dtype=np.float32)
-                    yield from rechunker.feed(to_mono_16k(data, rate, channels))
-                    last_data = time.monotonic()
+                available = stream.get_read_available()
+                now = time.monotonic()
+                if available > 0:
+                    # 쌓인 만큼 전부 읽는다 (덜 읽으면 버퍼가 넘쳐 소리가 잘려나간다)
+                    raw = stream.read(available, exception_on_overflow=False)
+                    audio = resampler.process(np.frombuffer(raw, dtype=np.float32))
+                    meter.add(audio)
+                    yield from rechunker.feed(audio)
+                    last_data = now
                     continue
-                time.sleep(0.01)
+                time.sleep(0.005)
                 # 아무 소리도 안 날 때 WASAPI 루프백은 데이터를 보내지 않으므로
-                # 무음을 직접 넣어줘야 마지막 문장이 끝난 것으로 처리된다
-                if time.monotonic() - last_data >= 0.2:
+                # 그동안의 무음을 직접 넣어줘야 마지막 문장이 끝난 것으로 처리된다
+                gap = now - last_data
+                if gap >= 0.3:
+                    silence = np.zeros(int(gap * SAMPLE_RATE), dtype=np.float32)
+                    meter.add(silence)
                     yield from rechunker.feed(silence)
-                    last_data += 0.1
+                    last_data = now
         finally:
             stream.stop_stream()
             stream.close()
