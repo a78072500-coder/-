@@ -1,0 +1,43 @@
+# 이 파일을 config.toml 로 복사한 뒤 고쳐서 쓰세요.
+# 적지 않은 항목은 기본값이 쓰입니다.
+
+[audio]
+# 캡처할 출력 장치 이름의 일부. 비워두면 Windows 기본 출력 장치.
+# 블루스택 소리만 받고 싶으면 Windows 설정 > 소리 > 볼륨 믹서에서
+# 블루스택(HD-Player) 출력 장치를 헤드셋 등으로 따로 지정하고 그 이름을 적으세요.
+# 장치 이름은 `python -m jp_subtitle --list-devices` 로 확인할 수 있습니다.
+device = ""
+
+[whisper]
+model = "large-v3-turbo"   # 그래픽카드 메모리가 부족하면 "medium" 또는 "small"
+device = "cuda"            # 그래픽카드가 없으면 "cpu"
+compute_type = "float16"   # cpu 라면 "int8"
+beam_size = 5
+
+[translator]
+engine = "deepl"           # "deepl" | "claude" | "none"(번역 안 함)
+deepl_api_key = ""         # https://www.deepl.com/pro-api 무료 키 (끝이 :fx)
+# engine = "claude" 일 때는 ANTHROPIC_API_KEY 환경변수를 설정하세요.
+claude_model = "claude-opus-5-5"
+context_lines = 4          # 번역할 때 참고할 직전 대화 수
+
+[segmenter]
+vad_threshold = 0.5        # 잡음이 자막으로 뜨면 올리고(0.6~0.7), 말이 안 잡히면 내리세요
+silence_end_sec = 0.6      # 이만큼 조용하면 문장 끝. 문장이 자주 끊기면 0.8~1.0 으로
+max_utterance_sec = 12.0
+min_utterance_sec = 0.4
+partial_interval_sec = 1.5 # 말하는 중 회색 임시 자막 갱신 간격. 0 이면 끔
+
+[overlay]
+font_family = "Malgun Gothic"
+font_size = 20
+history_lines = 3          # 화면에 남길 이전 문장 수
+opacity = 0.85             # 배경 불투명도 (0~1)
+width = 1000
+x = -1                     # -1 이면 마지막 위치(없으면 화면 아래 가운데)
+y = -1
+show_japanese = true
+
+[log]
+enabled = true             # 대화 내용을 logs/ 폴더에 txt 로 저장 (일본어 복습용)
+directory = "logs"

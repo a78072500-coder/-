@@ -1,0 +1,10 @@
+numpy
+scipy
+faster-whisper>=1.1
+PySide6>=6.6
+deepl>=1.16
+anthropic>=2.0
+PyAudioWPatch>=0.2.12; sys_platform == "win32"
+# GPU(CUDA 12) 로 Whisper 를 돌릴 때 필요한 라이브러리
+nvidia-cublas-cu12; sys_platform == "win32"
+nvidia-cudnn-cu12>=9,<10; sys_platform == "win32"
