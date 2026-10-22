@@ -11,7 +11,18 @@
 - 내 목소리는 마이크로 들어가므로 자막에 잡히지 않습니다. 상대방 목소리만 나옵니다.
 - 대화 내용은 `logs/` 폴더에 txt로 저장되어 일본어 복습에 쓸 수 있습니다.
 
-## 1. 설치 (처음 한 번)
+## 0. 가장 쉬운 방법: exe 받기 (Python 설치 필요 없음)
+
+1. 이 저장소의 **Actions** 탭 → **Windows build** → 가장 최근 초록색 실행을 엽니다.
+2. 아래 **Artifacts**에서 `jp_subtitle-windows`를 내려받아 압축을 풉니다.
+   (그래픽카드용 라이브러리가 들어 있어서 1GB가 넘습니다)
+3. 폴더 안 `config.toml`을 메모장으로 열고 `deepl_api_key`에 DeepL 무료 키를 넣습니다.
+   키가 없어도 일본어 자막은 나옵니다.
+4. `jp_subtitle.exe`를 더블클릭합니다.
+
+그래픽카드를 쓸 수 없는 상황이면 자동으로 CPU 모드로 바뀌고, 자막 창에 안내가 뜹니다.
+
+## 1. 직접 설치 (Python으로 실행)
 
 1. **Python 3.11 이상** 설치: <https://www.python.org/downloads/> (설치할 때 "Add python.exe to PATH" 체크)
 2. **NVIDIA 그래픽 드라이버**를 최신으로 업데이트합니다.
@@ -73,21 +84,22 @@ python -m jp_subtitle --input sample.wav    :: 스피커 대신 wav 파일로 �
 
 | 증상 | 해결 |
 |---|---|
-| `cublas64_12.dll`·`cudnn` 관련 오류 | `pip install -r requirements.txt`를 다시 실행하고 그래픽 드라이버를 업데이트하세요. 그래도 안 되면 `[whisper] device = "cpu"`, `compute_type = "int8"`, `model = "small"`로 바꾸세요(느리지만 동작합니다). |
+| 자막 창에 "CPU 로 실행 중" 안내 | `pip install -r requirements.txt`를 다시 실행하고 그래픽 드라이버를 업데이트하세요. 그래도 안 되면 `[whisper] device = "cpu"`, `compute_type = "int8"`, `model = "small"`로 바꾸세요(느리지만 동작합니다). |
 | 그래픽카드 메모리 부족 | `model = "medium"` 또는 `"small"` |
 | 잡음이 자막으로 뜸 | `[segmenter] vad_threshold`를 0.6~0.7로 올리세요 |
 | 문장이 중간에 자주 끊김 | `silence_end_sec`를 0.8~1.0으로 올리세요 |
 | 자막이 늦게 뜸 | `silence_end_sec`를 0.4~0.5로 내리고 `beam_size`를 1~2로 낮추세요 |
 | "ご視聴ありがとうございました" 같은 엉뚱한 문장 | 무음에서 Whisper가 지어내는 문구입니다. 자주 나오는 문구는 `jp_subtitle/transcriber.py`의 `HALLUCINATIONS`에 추가하세요. |
 
-## 5. exe로 만들기 (선택)
+## 5. exe 직접 만들기 (선택)
 
 ```bat
 pip install pyinstaller
-build_exe.bat
+python scripts\build_exe.py
 ```
 
-`dist\jp_subtitle\jp_subtitle.exe`가 생성됩니다. `config.toml`을 exe와 같은 폴더에 두세요.
+`dist\jp_subtitle\jp_subtitle.exe`가 생성됩니다. GitHub에 push하면 Actions가 같은 빌드를 자동으로 수행합니다.
+이때 일본어 음성(TTS)을 만들어 실제 Whisper로 인식되는지도 함께 검사합니다.
 
 ## 개발
 

@@ -239,6 +239,8 @@ def test_main_with_wav_file(tmp_path, monkeypatch, capsys):
     from jp_subtitle.__main__ import main
 
     class StubTranscriber:
+        notice = ""
+
         def __init__(self, cfg):
             self.n = 0
 
@@ -254,13 +256,15 @@ def test_main_with_wav_file(tmp_path, monkeypatch, capsys):
     wavfile.write(wav, 16000, (audio * 32767).astype(np.int16))
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        f'[translator]\nengine = "none"\n[segmenter]\npartial_interval_sec = 0\n'
+        f'[translator]\nengine = "deepl"\n[segmenter]\npartial_interval_sec = 0\n'
         f'[log]\ndirectory = "{(tmp_path / "logs").as_posix()}"\n',
         encoding="utf-8",
     )
     assert main(["--config", str(cfg), "--input", str(wav), "--no-gui", "--fast"]) == 0
     out = capsys.readouterr().out
     assert "[JA] 文1" in out and "[JA] 文2" in out
+    # DeepL 키가 없으면 번역만 끄고 자막은 계속 나온다
+    assert "번역 꺼짐" in out
     assert len(list((tmp_path / "logs").glob("*.txt"))) == 1
 
 
@@ -292,3 +296,27 @@ def test_claude_translator_request(monkeypatch):
         lambda **kw: SimpleNamespace(stop_reason="refusal", content=[]),
     )
     assert tr.translate("やあ", []) == ""
+
+
+def test_transcriber_falls_back_to_cpu(monkeypatch):
+    import jp_subtitle.transcriber as transcriber_mod
+    from jp_subtitle.config import WhisperConfig
+
+    loads = []
+
+    def fake_load(self, model, device, compute_type):
+        loads.append((model, device, compute_type))
+        if device == "cuda":
+            raise RuntimeError("Library cublas64_12.dll is not found")
+
+    monkeypatch.setattr(transcriber_mod.Transcriber, "_load", fake_load)
+    t = transcriber_mod.Transcriber(WhisperConfig())
+    assert loads == [("large-v3-turbo", "cuda", "float16"), ("small", "cpu", "int8")]
+    assert "CPU" in t.notice
+
+    loads.clear()
+    with pytest.raises(RuntimeError):
+        def broken(self, *a):
+            raise RuntimeError("x")
+        monkeypatch.setattr(transcriber_mod.Transcriber, "_load", broken)
+        transcriber_mod.Transcriber(WhisperConfig(device="cpu", compute_type="int8"))

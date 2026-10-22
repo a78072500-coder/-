@@ -2,7 +2,7 @@
 
 import sys
 
-from jp_subtitle.__main__ import main
+from jp_subtitle.__main__ import run
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

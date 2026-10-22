@@ -31,7 +31,15 @@ def _default_config_path() -> Path:
     return base / "config.toml"
 
 
+def _utf8_console() -> None:
+    # 한국어 Windows 콘솔(cp949)이나 파이프로 출력할 때 일본어 때문에 죽지 않게
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     parser = argparse.ArgumentParser(
         prog="jp_subtitle", description="일본어 음성을 실시간 자막 + 한국어 번역으로 보여줍니다."
     )
@@ -59,8 +67,19 @@ def main(argv: list[str] | None = None) -> int:
     from .transcriber import Transcriber
     from .translators import create_translator
 
-    translator = create_translator(cfg.translator)
+    notices: list[str] = []
+    try:
+        translator = create_translator(cfg.translator)
+    except ValueError as e:
+        # 키가 없어도 일본어 자막은 볼 수 있게 번역만 끈다
+        from .translators import NoTranslator
+
+        print(f"[번역] {e}")
+        notices.append(f"번역 꺼짐: {e}")
+        translator = NoTranslator()
     transcriber = Transcriber(cfg.whisper)
+    if transcriber.notice:
+        notices.append(transcriber.notice)
     segmenter = Segmenter(cfg.segmenter, SileroSpeechProb())
     if args.input:
         source = FileSource(args.input, realtime=not args.fast)
@@ -77,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         pipeline = Pipeline(source, segmenter, transcribe, translator, sink,
                             cfg.translator.context_lines, log)
         pipeline.start()
+        for notice in notices:
+            sink.status(notice)
         print("[시작] Ctrl+C 로 종료")
         try:
             while not pipeline.wait(0.5):
@@ -97,12 +118,29 @@ def main(argv: list[str] | None = None) -> int:
                         cfg.translator.context_lines, log)
     overlay.show()
     pipeline.start()
-    bridge.status("듣는 중… 상대방이 말하면 자막이 나타납니다 (우클릭: 메뉴)")
+    bridge.status(" / ".join(notices) or "듣는 중… 상대방이 말하면 자막이 나타납니다 (우클릭: 메뉴)")
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     app.aboutToQuit.connect(pipeline.stop)
     app.aboutToQuit.connect(overlay.close)
     return app.exec()
 
 
+def run() -> int:
+    """exe 를 더블클릭해서 실행했을 때 오류가 나도 창이 바로 닫히지 않게 한다."""
+    try:
+        return main()
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 0
+    except Exception:
+        if not getattr(sys, "frozen", False):
+            raise
+        import traceback
+
+        traceback.print_exc()
+        print("\n오류가 발생했습니다. 위 메시지를 복사해서 알려주세요.")
+        input("엔터를 누르면 종료합니다...")
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

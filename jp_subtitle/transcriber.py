@@ -51,22 +51,41 @@ def _add_nvidia_dll_dirs() -> None:
     import site
 
     roots = [Path(p) for p in site.getsitepackages() + [site.getusersitepackages()]]
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys._MEIPASS))  # PyInstaller exe 안에 같이 묶인 DLL
     for root in roots:
         for bin_dir in root.glob("nvidia/*/bin"):
             os.add_dll_directory(str(bin_dir))
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
+CPU_FALLBACK_MODEL = "small"  # GPU 를 못 쓸 때 실시간으로 돌릴 수 있는 크기
+
+
 class Transcriber:
     def __init__(self, cfg: WhisperConfig):
-        if cfg.device == "cuda":
+        self.cfg = cfg
+        self.notice = ""  # GPU 대신 CPU 로 바꿨을 때 사용자에게 보여줄 안내
+        try:
+            self._load(cfg.model, cfg.device, cfg.compute_type)
+        except Exception as e:
+            if cfg.device == "cpu":
+                raise
+            print(f"[인식] GPU 로 Whisper 를 실행하지 못했습니다: {e}")
+            self.notice = (
+                "그래픽카드(CUDA)를 쓰지 못해 CPU 로 실행 중입니다. "
+                "자막이 느리거나 덜 정확할 수 있습니다 (README 문제 해결 참고)."
+            )
+            self._load(CPU_FALLBACK_MODEL, "cpu", "int8")
+
+    def _load(self, model: str, device: str, compute_type: str) -> None:
+        if device == "cuda":
             _add_nvidia_dll_dirs()
         from faster_whisper import WhisperModel
 
-        self.cfg = cfg
-        print(f"[인식] Whisper 모델 로딩: {cfg.model} ({cfg.device}, {cfg.compute_type})")
-        self.model = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
-        # 첫 호출이 느리지 않게 미리 한 번 돌려둔다
+        print(f"[인식] Whisper 모델 로딩: {model} ({device}, {compute_type})")
+        self.model = WhisperModel(model, device=device, compute_type=compute_type)
+        # 첫 호출이 느리지 않게, 그리고 CUDA 라이브러리 문제를 여기서 드러내도록 한 번 돌려둔다
         self.transcribe(np.zeros(16000, dtype=np.float32), beam_size=1)
 
     def transcribe(self, audio: np.ndarray, beam_size: int | None = None) -> str:
