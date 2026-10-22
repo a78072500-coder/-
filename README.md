@@ -13,17 +13,21 @@
 
 ## 0. 가장 쉬운 방법: exe 받기 (Python 설치 필요 없음)
 
-1. 이 저장소의 **Actions** 탭 → **Windows build** → 가장 최근 초록색 실행을 엽니다.
-2. 아래 **Artifacts**에서 `jp_subtitle-windows`를 내려받아 압축을 풉니다.
-   (그래픽카드용 라이브러리가 들어 있어서 1GB가 넘습니다)
-3. 폴더 안 `config.toml`을 메모장으로 열고 `deepl_api_key`에 DeepL 무료 키를 넣습니다.
+1. **[jp_subtitle-windows.zip 내려받기](https://github.com/a78072500-coder/-/releases/latest/download/jp_subtitle-windows.zip)**
+   (로그인 필요 없음. 그래픽카드용 라이브러리가 들어 있어서 1GB가 넘습니다)
+2. 압축을 풀고, 폴더 안 `config.toml`을 메모장으로 열어 `deepl_api_key`에 DeepL 무료 키를 넣습니다.
    키가 없어도 일본어 자막은 나옵니다.
-4. `jp_subtitle.exe`를 더블클릭합니다.
+3. `jp_subtitle.exe`를 더블클릭합니다.
 
 그래픽카드를 쓸 수 없는 상황이면 자동으로 CPU 모드로 바뀌고, 자막 창에 안내가 뜹니다.
 
-**업데이트할 때**는 1GB가 넘는 전체를 다시 받을 필요 없이 `jp_subtitle-exe-only`만 받아서
-기존 폴더의 `jp_subtitle.exe`를 덮어쓰면 됩니다 (`config.toml`은 그대로 유지됩니다).
+### 업데이트
+전체를 다시 받을 필요 없이 PowerShell에서 아래 한 줄이면 됩니다.
+(바탕화면의 `jp_subtitle` 폴더 기준이며, `config.toml`은 그대로 유지됩니다)
+
+```powershell
+$d=[Environment]::GetFolderPath('Desktop')+'\jp_subtitle'; taskkill /im jp_subtitle.exe /f 2>$null; $ProgressPreference='SilentlyContinue'; Invoke-WebRequest https://github.com/a78072500-coder/-/releases/latest/download/jp_subtitle.exe -OutFile "$d\jp_subtitle.exe"; Start-Process "$d\jp_subtitle.exe" -WorkingDirectory $d
+```
 
 ## 1. 직접 설치 (Python으로 실행)
 
