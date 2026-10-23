@@ -5,9 +5,16 @@
         "source": "github",
         "repo": "anthropics/claude-plugins-community"
       }
+    },
+    "k-skill": {
+      "source": {
+        "source": "github",
+        "repo": "NomaDamas/k-skill"
+      }
     }
   },
   "enabledPlugins": {
-    "eli5@claude-community": true
+    "eli5@claude-community": true,
+    "k-skill@k-skill": true
   }
 }
