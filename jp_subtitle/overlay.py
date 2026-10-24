@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import html
+import sys
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QSettings, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -19,6 +30,12 @@ from PySide6.QtWidgets import (
 )
 
 from .config import OverlayConfig
+
+
+def _open_path(path: Path) -> None:
+    if not path.exists() and path.suffix == "":
+        path.mkdir(parents=True, exist_ok=True)
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
 def _tray_icon() -> QIcon:
@@ -69,7 +86,13 @@ class SinkBridge(QObject):
 
 
 class SubtitleOverlay(QWidget):
-    def __init__(self, cfg: OverlayConfig, bridge: SinkBridge):
+    def __init__(
+        self,
+        cfg: OverlayConfig,
+        bridge: SinkBridge,
+        config_path: Path | None = None,
+        log_dir: Path | None = None,
+    ):
         super().__init__(
             None,
             Qt.WindowType.FramelessWindowHint
@@ -77,6 +100,14 @@ class SubtitleOverlay(QWidget):
             | Qt.WindowType.Tool,
         )
         self.cfg = cfg
+        self.config_path = config_path
+        self.log_dir = log_dir
+        # 맑은 고딕은 맥에 없으므로 기본값일 때는 맥 기본 한글 글꼴로
+        self.font_family = (
+            "Apple SD Gothic Neo"
+            if sys.platform == "darwin" and cfg.font_family == OverlayConfig.font_family
+            else cfg.font_family
+        )
         self.font_size = cfg.font_size
         self.show_japanese = cfg.show_japanese
         self._lines: OrderedDict[int, _Line] = OrderedDict()
@@ -85,6 +116,8 @@ class SubtitleOverlay(QWidget):
         self._settings = QSettings("jp_subtitle", "overlay")
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # 맥에서 Tool 창은 다른 앱을 누르면 숨겨지므로 항상 보이게
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setWindowTitle("일본어 실시간 자막")
 
         self.label = QLabel(self)
@@ -134,6 +167,10 @@ class SubtitleOverlay(QWidget):
         menu.addAction("글자 작게 (Ctrl+휠↓)", lambda: self._change_font(-2))
         menu.addAction("기록 지우기", self._clear)
         menu.addSeparator()
+        if self.config_path is not None:
+            menu.addAction("설정 파일 열기 (바꾼 뒤 다시 실행)", lambda: _open_path(self.config_path))
+        if self.log_dir is not None:
+            menu.addAction("대화 기록 폴더 열기", lambda: _open_path(self.log_dir))
         menu.addAction("창 숨기기/보이기", self._toggle_visible)
         menu.addAction("종료", QApplication.quit)
 
@@ -238,9 +275,9 @@ class SubtitleOverlay(QWidget):
 
     def _render(self) -> None:
         fs = self.font_size
-        font = QFont(self.cfg.font_family)
+        font = QFont(self.font_family)
         self.label.setFont(font)
-        family = html.escape(self.cfg.font_family)
+        family = html.escape(self.font_family)
         parts: list[str] = []
         items = list(self._lines.values())
         for i, line in enumerate(items):

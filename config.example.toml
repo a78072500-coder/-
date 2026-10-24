@@ -7,10 +7,12 @@
 # 블루스택(HD-Player) 출력 장치를 헤드셋 등으로 따로 지정하고 그 이름을 적으세요.
 # 장치 이름은 `python -m jp_subtitle --list-devices` 로 확인할 수 있습니다.
 device = ""
+# (macOS) 이 이름이 들어간 앱 소리만 듣습니다. 예: "maum", "BlueStacks". 비우면 모든 소리.
+app = ""
 
 [whisper]
 model = "large-v3-turbo"   # 그래픽카드 메모리가 부족하면 "medium" 또는 "small"
-device = "cuda"            # 그래픽카드가 없으면 "cpu"
+device = "cuda"            # 그래픽카드가 없으면 "cpu" (맥은 자동으로 Apple GPU 사용)
 compute_type = "float16"   # cpu 라면 "int8"
 beam_size = 5
 

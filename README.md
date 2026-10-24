@@ -29,6 +29,31 @@
 $d=[Environment]::GetFolderPath('Desktop')+'\jp_subtitle'; taskkill /im jp_subtitle.exe /f 2>$null; $ProgressPreference='SilentlyContinue'; Invoke-WebRequest https://github.com/a78072500-coder/-/releases/latest/download/jp_subtitle.exe -OutFile "$d\jp_subtitle.exe"; Start-Process "$d\jp_subtitle.exe" -WorkingDirectory $d
 ```
 
+## macOS (맥북)
+
+Apple Silicon(M1 이후) 맥은 Apple GPU(MLX)로 음성인식을 돌려 Windows + NVIDIA와 비슷한 속도가 나옵니다.
+Intel 맥은 CPU로 돌아가서 느립니다. **macOS 13 이상**이 필요합니다.
+
+### 설치 / 업데이트
+터미널(응용 프로그램 → 유틸리티 → 터미널)에 붙여 넣으세요. 같은 명령으로 업데이트도 됩니다.
+
+```bash
+mkdir -p ~/Applications && cd ~/Applications && curl -fL -o /tmp/jp_subtitle-mac.zip https://github.com/a78072500-coder/-/releases/latest/download/jp_subtitle-mac.zip && rm -rf jp_subtitle-mac && ditto -x -k /tmp/jp_subtitle-mac.zip . && open jp_subtitle-mac/jp_subtitle.app
+```
+
+브라우저로 zip을 받았다면, 서명이 없는 앱이라 처음 열 때 막힙니다. 이때는
+**시스템 설정 → 개인정보 보호 및 보안 → 아래쪽 "그래도 열기"**를 누르세요.
+
+### 처음 실행할 때
+1. **'화면 및 시스템 오디오 녹음' 권한**을 허용하고 앱을 다시 실행합니다.
+   다른 앱(maum 등)의 소리를 듣는 데만 쓰고, 화면은 녹화하지 않습니다.
+2. 자막 창 우클릭 → **설정 파일 열기**에서 `deepl_api_key`를 넣고 앱을 다시 실행합니다.
+3. **maum 소리만 듣고 싶으면** 같은 파일의 `[audio]`에 `app = "maum"`처럼 앱 이름 일부를 적습니다.
+   이름은 터미널에서 `~/Applications/jp_subtitle-mac/jp_subtitle.app/Contents/MacOS/jp_subtitle --list-devices`로 확인할 수 있습니다.
+
+설정, 대화 기록, 로그(`jp_subtitle.log`)는 `~/Library/Application Support/jp_subtitle`에 저장됩니다.
+Apple Silicon 맥에서는 maum·헬로우톡 iPhone 앱이 App Store에서 그대로 설치되는 경우가 많아서, 블루스택 없이 쓸 수 있을 수도 있습니다.
+
 ## 1. 직접 설치 (Python으로 실행)
 
 1. **Python 3.11 이상** 설치: <https://www.python.org/downloads/> (설치할 때 "Add python.exe to PATH" 체크)
@@ -118,7 +143,8 @@ python -m pytest
 
 | 파일 | 역할 |
 |---|---|
-| `jp_subtitle/audio_capture.py` | WASAPI 루프백 캡처 / wav 파일 입력, 16kHz 모노 변환 |
+| `jp_subtitle/audio_capture.py` | WASAPI 루프백(Windows) / ScreenCaptureKit 도우미(macOS) / wav 파일 입력, 16kHz 모노 변환 |
+| `mac/sck_audio.swift` | macOS 시스템·앱 소리를 받아 넘겨주는 도우미 |
 | `jp_subtitle/segmenter.py` | silero VAD로 발화 단위 분리, 임시 조각 생성 |
 | `jp_subtitle/transcriber.py` | faster-whisper 인식, 환각 문구 필터 |
 | `jp_subtitle/translators/` | DeepL / Claude / 번역 안 함 |
