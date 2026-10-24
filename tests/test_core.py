@@ -506,3 +506,10 @@ def test_create_transcriber_on_mac(monkeypatch, machine, mlx_ok, expected):
     t = tm.create_transcriber(WhisperConfig())
     assert t.kind == expected[0]
     assert expected[1] in t.notice
+
+
+def test_config_accepts_smart_quotes_and_bom(tmp_path):
+    p = tmp_path / "config.toml"
+    # 맥 텍스트 편집기에서 따옴표를 직접 치면 둥근 따옴표가 들어간다, 메모장은 BOM 을 붙이기도 한다
+    p.write_text("\ufeff[translator]\ndeepl_api_key = \u201cabc:fx\u201d\n", encoding="utf-8")
+    assert load_config(p).translator.deepl_api_key == "abc:fx"
