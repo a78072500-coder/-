@@ -101,6 +101,9 @@ def main_mac() -> int:
         *[arg for name in collect for arg in ("--collect-all", name)],
         # mlx-whisper 가 설치하지만 실행에는 쓰지 않는 torch 는 빼서 앱 크기를 줄인다
         "--exclude-module", "torch",
+        # 실행에 쓰지 않는 pkg_resources 를 넣으면 최신 setuptools 와 PyInstaller 시작 훅이
+        # 맞지 않아 앱이 바로 죽는다 (module 'pkg_resources' has no attribute 'NullProvider')
+        "--exclude-module", "pkg_resources",
         "--add-binary", f"{helper}:.",
         "--add-data", f"{ROOT / 'config.example.toml'}:.",
         str(ROOT / "run.py"),
