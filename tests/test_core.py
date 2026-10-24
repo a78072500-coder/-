@@ -1,3 +1,4 @@
+import sys
 import threading
 import time
 
@@ -407,3 +408,100 @@ def test_loopback_reads_small_chunks_without_gaps(monkeypatch):
     body = audio[200 : 2 * SAMPLE_RATE - BLOCK_SAMPLES]
     rms = np.sqrt(np.convolve(body**2, np.ones(160) / 160, mode="valid"))
     assert rms.min() > 0.2
+
+
+# --- macOS (Linux 에서 가짜 도우미/플랫폼으로 확인) -----------------------------------
+
+FAKE_HELPER = r'''
+import sys, time, numpy as np
+mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
+if mode == "perm":
+    sys.stderr.write("PERMISSION\n"); sys.exit(3)
+rate = 48000
+t = np.arange(rate) / rate
+tone = (0.5 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+sys.stderr.write("READY\n"); sys.stderr.write("FORMAT 48000\n"); sys.stderr.flush()
+out = sys.stdout.buffer
+for i in range(0, len(tone), 1000):          # 1초 분량을 잘게 나눠서
+    out.write(tone[i:i + 1000].tobytes()[:3999] if i == 0 else tone[i:i + 1000].tobytes())
+    if i == 0:
+        out.write(tone[:1000].tobytes()[3999:])  # 4바이트 경계가 어긋난 조각도 처리해야 한다
+    out.flush()
+time.sleep(30)
+'''
+
+
+def _mac_source(tmp_path, *args):
+    from jp_subtitle.audio_capture import MacAudioSource
+
+    script = tmp_path / "fake_helper.py"
+    script.write_text(FAKE_HELPER, encoding="utf-8")
+    return MacAudioSource(helper=[sys.executable, str(script), *args])
+
+
+def test_mac_source_reads_helper_and_fills_silence(tmp_path):
+    src = _mac_source(tmp_path)
+    blocks = []
+    started = time.monotonic()
+    for block in src.blocks():
+        blocks.append(block)
+        if len(blocks) * BLOCK_SAMPLES >= int(1.8 * SAMPLE_RATE) or time.monotonic() - started > 20:
+            src.stop()
+    audio = np.concatenate(blocks)
+    # 1초짜리 톤이 끊김 없이 들어오고
+    tone_part = audio[200 : SAMPLE_RATE - BLOCK_SAMPLES]
+    rms = np.sqrt(np.convolve(tone_part**2, np.ones(160) / 160, mode="valid"))
+    assert rms.min() > 0.2
+    # 도우미가 조용해진 뒤에는 무음이 채워져 문장이 끝날 수 있다
+    assert len(audio) >= int(1.5 * SAMPLE_RATE)
+    assert np.abs(audio[int(1.3 * SAMPLE_RATE) :]).max() < 0.01
+
+
+def test_mac_source_permission_error(tmp_path):
+    from jp_subtitle.audio_capture import MAC_PERMISSION_HELP
+
+    src = _mac_source(tmp_path, "perm")
+    with pytest.raises(RuntimeError) as err:
+        for _ in src.blocks():
+            pass
+    assert str(err.value) == MAC_PERMISSION_HELP
+
+
+def test_mlx_repo_names():
+    from jp_subtitle.transcriber import mlx_repo
+
+    assert mlx_repo("large-v3-turbo") == "mlx-community/whisper-large-v3-turbo"
+    assert mlx_repo("small") == "mlx-community/whisper-small-mlx"
+    assert mlx_repo("someone/custom") == "someone/custom"
+
+
+@pytest.mark.parametrize(
+    "machine,mlx_ok,expected",
+    [
+        ("arm64", True, ("mlx", "")),
+        ("arm64", False, ("cpu", "Apple GPU")),
+        ("x86_64", True, ("cpu", "Intel")),
+    ],
+)
+def test_create_transcriber_on_mac(monkeypatch, machine, mlx_ok, expected):
+    import jp_subtitle.transcriber as tm
+    from jp_subtitle.config import WhisperConfig
+
+    class FakeMLX:
+        def __init__(self, cfg):
+            if not mlx_ok:
+                raise RuntimeError("no Metal device")
+            self.kind, self.notice = "mlx", ""
+
+    class FakeCPU:
+        def __init__(self, cfg):
+            assert (cfg.device, cfg.model, cfg.compute_type) == ("cpu", "small", "int8")
+            self.kind, self.notice = "cpu", ""
+
+    monkeypatch.setattr(tm.sys, "platform", "darwin")
+    monkeypatch.setattr(tm.platform, "machine", lambda: machine)
+    monkeypatch.setattr(tm, "MLXTranscriber", FakeMLX)
+    monkeypatch.setattr(tm, "Transcriber", FakeCPU)
+    t = tm.create_transcriber(WhisperConfig())
+    assert t.kind == expected[0]
+    assert expected[1] in t.notice

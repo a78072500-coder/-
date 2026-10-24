@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -101,3 +103,64 @@ class Transcriber:
         texts = [s.text.strip() for s in segments if s.no_speech_prob < 0.8]
         text = "".join(texts).strip()
         return "" if is_hallucination(text) else text
+
+
+# Apple Silicon 맥: faster-whisper 는 맥 GPU 를 못 쓰므로 MLX 로 변환된 모델을 쓴다
+MLX_MODELS = {
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "tiny": "mlx-community/whisper-tiny-mlx",
+}
+
+
+def mlx_repo(model: str) -> str:
+    return model if "/" in model else MLX_MODELS.get(model, f"mlx-community/whisper-{model}-mlx")
+
+
+class MLXTranscriber:
+    """Apple GPU(Metal) 로 Whisper 를 돌린다. 빔 서치가 없어 항상 greedy 디코딩."""
+
+    def __init__(self, cfg: WhisperConfig):
+        import mlx_whisper
+
+        self.cfg = cfg
+        self.notice = ""
+        self._mlx_whisper = mlx_whisper
+        self.repo = mlx_repo(cfg.model)
+        print(f"[인식] Whisper 모델 로딩: {self.repo} (mlx)")
+        self.transcribe(np.zeros(16000, dtype=np.float32))
+
+    def transcribe(self, audio: np.ndarray, beam_size: int | None = None) -> str:
+        result = self._mlx_whisper.transcribe(
+            audio,
+            path_or_hf_repo=self.repo,
+            language="ja",
+            temperature=0.0,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.6,
+            logprob_threshold=-1.0,
+            verbose=None,
+        )
+        texts = [s["text"].strip() for s in result["segments"] if s.get("no_speech_prob", 0) < 0.8]
+        text = "".join(texts).strip()
+        return "" if is_hallucination(text) else text
+
+
+def create_transcriber(cfg: WhisperConfig):
+    """플랫폼에 맞는 음성인식기를 고른다. Windows/Linux 는 faster-whisper(CUDA→CPU)."""
+    if sys.platform != "darwin" or cfg.device == "cpu":
+        return Transcriber(cfg)
+    if platform.machine() == "arm64":
+        try:
+            return MLXTranscriber(cfg)
+        except Exception as e:
+            print(f"[인식] Apple GPU(MLX) 로 Whisper 를 실행하지 못했습니다: {e}")
+            notice = "Apple GPU(MLX)를 쓰지 못해 CPU 로 실행 중입니다. 자막이 느릴 수 있습니다."
+    else:
+        notice = "Intel 맥은 그래픽 가속이 안 돼 CPU 로 실행 중입니다. 자막이 느릴 수 있습니다."
+    t = Transcriber(replace(cfg, model=CPU_FALLBACK_MODEL, device="cpu", compute_type="int8"))
+    t.notice = notice
+    return t

@@ -4,6 +4,7 @@
     python scripts/smoke_test.py check ja.wav -- python -m jp_subtitle
     python scripts/smoke_test.py check ja.wav -- dist/jp_subtitle/jp_subtitle.exe
     python scripts/smoke_test.py check ja.wav --device cuda -- ...   # GPU 없을 때 CPU 전환 확인
+    python scripts/smoke_test.py check ja.wav --device mlx -- ...    # 맥: Apple GPU 로 실행 확인
 """
 
 from __future__ import annotations
@@ -84,6 +85,9 @@ def check(wav: Path, command: list[str], device: str) -> int:
     if device == "cuda" and "CPU 로 실행 중" not in out:
         print("실패: GPU 가 없는데 CPU 전환 안내가 나오지 않았습니다")
         return 1
+    if device == "mlx" and "(mlx)" not in out:
+        print("실패: Apple GPU(MLX) 로 실행되지 않았습니다")
+        return 1
     print("통과: 일본어 음성이 정상적으로 인식되었습니다")
     return 0
 
@@ -103,7 +107,7 @@ def main() -> int:
     p.add_argument("wav", type=Path)
     p.add_argument(
         "--device", default="cpu",
-        help="cuda 로 주면 GPU 가 없는 곳에서 CPU 자동 전환이 되는지 확인할 수 있다",
+        help="cuda: GPU 없는 곳에서 CPU 자동 전환 확인 / mlx: 맥에서 Apple GPU 로 실행되는지 확인",
     )
     args = parser.parse_args(argv)
     if args.cmd == "make-wav":

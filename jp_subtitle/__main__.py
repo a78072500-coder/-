@@ -25,10 +25,43 @@ class ConsoleSink:
         print(f"[상태] {text}")
 
 
+MAC_APP_DIR = Path.home() / "Library" / "Application Support" / "jp_subtitle"
+
+
 def _default_config_path() -> Path:
+    frozen = getattr(sys, "frozen", False)
+    if frozen and sys.platform == "darwin":
+        # .app 안이나 옆은 macOS 가 읽기 전용 위치로 옮겨 실행할 수 있어서 사용자 폴더에 둔다
+        path = MAC_APP_DIR / "config.toml"
+        if not path.exists():
+            MAC_APP_DIR.mkdir(parents=True, exist_ok=True)
+            example = Path(sys._MEIPASS) / "config.example.toml"
+            if example.exists():
+                path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+        return path
     # exe 로 빌드했을 때는 exe 옆의 config.toml 을 쓴다
-    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+    base = Path(sys.executable).parent if frozen else Path.cwd()
     return base / "config.toml"
+
+
+class _Tee:
+    """화면에 콘솔이 없는 macOS .app 에서도 로그가 파일에 남게 한다."""
+
+    def __init__(self, path: Path, original):
+        self._file = path.open("a", encoding="utf-8", buffering=1)
+        self._original = original
+
+    def write(self, text: str) -> int:
+        self._file.write(text)
+        if self._original is not None:
+            try:
+                self._original.write(text)
+            except (OSError, ValueError):
+                pass
+        return len(text)
+
+    def flush(self) -> None:
+        self._file.flush()
 
 
 def _utf8_console() -> None:
@@ -66,6 +99,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.list_devices:
+        if sys.platform == "darwin":
+            from .audio_capture import list_mac_apps
+
+            print("소리를 낼 수 있는 실행 중인 앱 ([audio] app 에 이름 일부를 적으세요):")
+            for name in list_mac_apps():
+                print(f"- {name}")
+            return 0
         from .audio_capture import list_loopback_devices
 
         for dev in list_loopback_devices():
@@ -73,13 +113,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config_path = args.config or _default_config_path()
+    if getattr(sys, "frozen", False) and sys.platform == "darwin" and not args.no_gui:
+        log_file = config_path.parent / "jp_subtitle.log"
+        sys.stdout = _Tee(log_file, sys.stdout)
+        sys.stderr = _Tee(log_file, sys.stderr)
     cfg = load_config(config_path)
     print(f"[설정] {config_path if config_path.exists() else '기본값 (config.toml 없음)'}")
 
-    from .audio_capture import FileSource, LoopbackSource
+    from .audio_capture import FileSource, LoopbackSource, MacAudioSource
     from .pipeline import ConversationLog, Pipeline
     from .segmenter import Segmenter, SileroSpeechProb
-    from .transcriber import Transcriber
+    from .transcriber import create_transcriber
     from .translators import create_translator
 
     notices: list[str] = []
@@ -92,15 +136,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[번역] {e}")
         notices.append(f"번역 꺼짐: {e}")
         translator = NoTranslator()
-    transcriber = Transcriber(cfg.whisper)
+    transcriber = create_transcriber(cfg.whisper)
     if transcriber.notice:
         notices.append(transcriber.notice)
     segmenter = Segmenter(cfg.segmenter, SileroSpeechProb())
     if args.input:
         source = FileSource(args.input, realtime=not args.fast)
+    elif sys.platform == "darwin":
+        source = MacAudioSource(cfg.audio.app)
     else:
         source = LoopbackSource(cfg.audio.device)
-    log = ConversationLog(cfg.log.directory) if cfg.log.enabled else None
+    # 대화 기록 폴더는 설정 파일 옆 (상대 경로일 때)
+    log_dir = config_path.parent / cfg.log.directory
+    log = ConversationLog(log_dir) if cfg.log.enabled else None
 
     def transcribe(audio, final: bool) -> str:
         # 임시 자막은 빠르게(beam 1), 확정본은 정확하게
@@ -128,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     bridge = SinkBridge()
-    overlay = SubtitleOverlay(cfg.overlay, bridge)
+    overlay = SubtitleOverlay(cfg.overlay, bridge, config_path=config_path, log_dir=log_dir)
     pipeline = Pipeline(source, segmenter, transcribe, translator, bridge,
                         cfg.translator.context_lines, log)
     overlay.show()
@@ -152,9 +200,22 @@ def run() -> int:
         import traceback
 
         traceback.print_exc()
+        if sys.platform == "darwin":
+            _mac_alert(traceback.format_exc())
+            return 1
         print("\n오류가 발생했습니다. 위 메시지를 복사해서 알려주세요.")
         input("엔터를 누르면 종료합니다...")
         return 1
+
+
+def _mac_alert(details: str) -> None:
+    """콘솔이 없는 .app 에서 오류를 대화상자로 보여준다."""
+    import subprocess
+
+    log = MAC_APP_DIR / "jp_subtitle.log"
+    message = f"자세한 내용은 {log} 에 저장되었습니다.\n\n{details[-800:]}"
+    script = 'display alert "일본어 자막: 오류가 발생했습니다" message (system attribute "JP_MSG") as critical'
+    subprocess.run(["/usr/bin/osascript", "-e", script], env={"JP_MSG": message}, check=False)
 
 
 if __name__ == "__main__":

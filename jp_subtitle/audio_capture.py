@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -141,7 +144,7 @@ def _require_windows() -> None:
     if sys.platform != "win32":
         raise RuntimeError(
             "스피커 루프백 캡처는 Windows 에서만 됩니다. "
-            "다른 OS 에서는 --input 으로 wav 파일을 넣어 시험하세요."
+            "macOS 는 MacAudioSource 를, 그 밖의 OS 는 --input 으로 wav 파일을 쓰세요."
         )
 
 
@@ -224,3 +227,117 @@ class LoopbackSource:
             stream.stop_stream()
             stream.close()
             p.terminate()
+
+
+MAC_PERMISSION_HELP = (
+    "시스템 오디오를 들으려면 권한이 필요합니다: 시스템 설정 → 개인정보 보호 및 보안 → "
+    "'화면 및 시스템 오디오 녹음' 에서 jp_subtitle 을 켜고 프로그램을 다시 실행하세요."
+)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def find_mac_helper() -> Path:
+    """ScreenCaptureKit 도우미(sck_audio) 위치. 개발 중이면 없을 때 swiftc 로 빌드한다."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "sck_audio"
+    built = _REPO_ROOT / "build" / "sck_audio"
+    source = _REPO_ROOT / "mac" / "sck_audio.swift"
+    if not built.exists() or built.stat().st_mtime < source.stat().st_mtime:
+        if shutil.which("swiftc") is None:
+            raise RuntimeError("Xcode 명령행 도구가 필요합니다: 터미널에서 xcode-select --install")
+        built.parent.mkdir(exist_ok=True)
+        print("[캡처] 오디오 도우미 빌드 중 (처음 한 번)…")
+        subprocess.run(["swiftc", "-O", str(source), "-o", str(built)], check=True)
+    return built
+
+
+def list_mac_apps() -> list[str]:
+    out = subprocess.run([str(find_mac_helper()), "--list"], capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        msg = out.stderr.strip()
+        raise RuntimeError(MAC_PERMISSION_HELP if msg == "PERMISSION" else msg)
+    return [line.split("\t")[0] for line in out.stdout.splitlines() if line.strip()]
+
+
+class MacAudioSource:
+    """macOS ScreenCaptureKit 도우미를 실행해 시스템(또는 특정 앱) 소리를 받는다."""
+
+    def __init__(self, app_name: str = "", helper: Path | list[str] | None = None) -> None:
+        self.app_name = app_name
+        self._helper = helper  # 테스트에서 가짜 도우미를 넣을 수 있게
+        self._stop = threading.Event()
+        self._proc: subprocess.Popen | None = None
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+
+    def blocks(self) -> Iterator[np.ndarray]:
+        helper = self._helper or find_mac_helper()
+        cmd = list(helper) if isinstance(helper, list) else [str(helper)]
+        if self.app_name:
+            cmd += ["--app", self.app_name]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._proc = proc
+        chunks: queue.Queue[bytes | None] = queue.Queue()
+        state: dict = {"rate": None, "error": None, "format": threading.Event()}
+
+        def read_stdout() -> None:
+            while data := proc.stdout.read1(65536):
+                chunks.put(data)
+            chunks.put(None)
+
+        def read_stderr() -> None:
+            for raw_line in proc.stderr:
+                line = raw_line.decode("utf-8", "replace").strip()
+                if line.startswith("FORMAT "):
+                    state["rate"] = int(float(line.split()[1]))
+                    state["format"].set()
+                elif line == "READY":
+                    target = f"앱: {self.app_name}" if self.app_name else "모든 소리"
+                    print(f"[캡처] macOS 시스템 오디오 ({target})")
+                elif line:
+                    state["error"] = MAC_PERMISSION_HELP if line == "PERMISSION" else line
+                    print(f"[캡처] {state['error']}")
+
+        for target in (read_stdout, read_stderr):
+            threading.Thread(target=target, daemon=True).start()
+
+        rechunker = _Rechunker()
+        meter = _LevelMeter()
+        resampler: StreamResampler | None = None
+        leftover = b""
+        last_data = time.monotonic()
+        try:
+            while not self._stop.is_set():
+                try:
+                    data = chunks.get(timeout=0.05)
+                except queue.Empty:
+                    # 소리가 안 날 때는 데이터가 오지 않으므로 그동안의 무음을 넣는다
+                    gap = time.monotonic() - last_data
+                    if gap >= 0.3:
+                        silence = np.zeros(int(gap * SAMPLE_RATE), dtype=np.float32)
+                        meter.add(silence)
+                        yield from rechunker.feed(silence)
+                        last_data = time.monotonic()
+                    continue
+                if data is None:
+                    if self._stop.is_set():
+                        return
+                    proc.wait(timeout=5)
+                    raise RuntimeError(state["error"] or f"오디오 도우미가 종료되었습니다 (코드 {proc.returncode})")
+                if resampler is None:
+                    # 도우미는 FORMAT 을 stderr 에 먼저 쓰지만 두 파이프를 읽는 순서는 보장되지 않는다
+                    state["format"].wait(timeout=2)
+                    resampler = StreamResampler(state["rate"] or 48000, 1)
+                data = leftover + data
+                usable = len(data) // 4 * 4
+                leftover = data[usable:]
+                audio = resampler.process(np.frombuffer(data[:usable], dtype=np.float32))
+                meter.add(audio)
+                yield from rechunker.feed(audio)
+                last_data = time.monotonic()
+        finally:
+            if proc.poll() is None:
+                proc.terminate()

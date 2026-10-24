@@ -12,6 +12,8 @@ class AudioConfig:
     # 루프백으로 캡처할 출력 장치 이름의 일부 (빈 문자열이면 기본 출력 장치)
     # 예: 블루스택 소리를 헤드셋으로 보내고 "Headset" 을 적으면 그 소리만 캡처된다.
     device: str = ""
+    # macOS: 이 이름이 들어간 앱 소리만 듣는다 (예: "maum", "BlueStacks"). 비우면 모든 소리.
+    app: str = ""
 
 
 @dataclass
