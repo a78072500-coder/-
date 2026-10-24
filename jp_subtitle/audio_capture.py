@@ -308,12 +308,14 @@ class MacAudioSource:
         meter = _LevelMeter()
         resampler: StreamResampler | None = None
         leftover = b""
-        last_data = time.monotonic()
+        last_data: float | None = None  # 첫 소리가 오기 전에는 무음을 채울 필요가 없다
         try:
             while not self._stop.is_set():
                 try:
                     data = chunks.get(timeout=0.05)
                 except queue.Empty:
+                    if last_data is None:
+                        continue
                     # 소리가 안 날 때는 데이터가 오지 않으므로 그동안의 무음을 넣는다
                     gap = time.monotonic() - last_data
                     if gap >= 0.3:

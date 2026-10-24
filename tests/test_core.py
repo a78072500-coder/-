@@ -249,7 +249,8 @@ def test_main_with_wav_file(tmp_path, monkeypatch, capsys):
             self.n += 1
             return f"文{self.n}"
 
-    monkeypatch.setattr(transcriber_mod, "Transcriber", StubTranscriber)
+    # 플랫폼별 선택(맥이면 MLX)을 거치지 않도록 선택 함수 자체를 바꾼다
+    monkeypatch.setattr(transcriber_mod, "create_transcriber", StubTranscriber)
     monkeypatch.setattr(segmenter_mod, "SileroSpeechProb", lambda: energy_speech_prob)
 
     audio = np.concatenate(silence(0.3) + tone(1.0) + silence(1.0) + tone(1.0))
