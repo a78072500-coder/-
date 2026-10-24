@@ -90,6 +90,9 @@ def _apply(obj, data: dict, path: str = "") -> None:
             setattr(obj, key, value)
 
 
+SMART_QUOTES = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"})
+
+
 def load_config(path: str | Path | None) -> Config:
     config = Config()
     if path is None:
@@ -97,6 +100,8 @@ def load_config(path: str | Path | None) -> Config:
     path = Path(path)
     if not path.exists():
         return config
-    with path.open("rb") as f:
-        _apply(config, tomllib.load(f))
+    text = path.read_text(encoding="utf-8-sig")
+    # 맥 텍스트 편집기·워드 등이 바꿔 넣는 둥근 따옴표를 일반 따옴표로 되돌린다
+    text = text.translate(SMART_QUOTES)
+    _apply(config, tomllib.loads(text))
     return config

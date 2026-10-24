@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import subprocess
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -35,6 +36,14 @@ from .config import OverlayConfig
 def _open_path(path: Path) -> None:
     if not path.exists() and path.suffix == "":
         path.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        # .toml 은 연결된 앱이 없는 경우가 많아서 텍스트 편집기로 직접 연다
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-t", str(path)])
+            return
+        if sys.platform == "win32":
+            subprocess.Popen(["notepad.exe", str(path)])
+            return
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
