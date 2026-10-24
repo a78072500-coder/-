@@ -38,8 +38,23 @@ def _utf8_console() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _disable_quick_edit() -> None:
+    """검은 창을 클릭하면 Windows 가 '선택' 모드로 프로그램을 멈추는 것을 막는다."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+        kernel32.SetConsoleMode(handle, (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS)
+
+
 def main(argv: list[str] | None = None) -> int:
     _utf8_console()
+    _disable_quick_edit()
     parser = argparse.ArgumentParser(
         prog="jp_subtitle", description="일본어 음성을 실시간 자막 + 한국어 번역으로 보여줍니다."
     )

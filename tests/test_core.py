@@ -320,3 +320,90 @@ def test_transcriber_falls_back_to_cpu(monkeypatch):
             raise RuntimeError("x")
         monkeypatch.setattr(transcriber_mod.Transcriber, "_load", broken)
         transcriber_mod.Transcriber(WhisperConfig(device="cpu", compute_type="int8"))
+
+
+# --- 실시간 캡처 (가짜 WASAPI 장치) -----------------------------------------------
+
+def test_stream_resampler_matches_one_shot():
+    from jp_subtitle.audio_capture import StreamResampler
+
+    rng = np.random.default_rng(0)
+    for rate in (48000, 44100):
+        t = np.arange(rate) / rate
+        sig = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+        stereo = np.stack([sig, sig], 1).reshape(-1)
+        whole = StreamResampler(rate, 2).process(stereo)
+        r = StreamResampler(rate, 2)
+        parts, i = [], 0
+        while i < len(sig):
+            n = int(rng.integers(1, 1500))
+            parts.append(r.process(stereo[2 * i : 2 * (i + n)]))
+            i += n
+        chunked = np.concatenate(parts)
+        assert abs(len(chunked) - SAMPLE_RATE) <= 1
+        np.testing.assert_allclose(chunked, whole[: len(chunked)], atol=1e-5)
+
+
+def test_loopback_reads_small_chunks_without_gaps(monkeypatch):
+    """장치가 조금씩만 데이터를 줘도 소리가 빠짐없이 이어지고 가짜 무음이 끼지 않는다."""
+    import sys
+    import types
+
+    import jp_subtitle.audio_capture as ac
+
+    rate = 48000
+    t = np.arange(rate * 2) / rate
+    tone_48k = (0.5 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+    stereo = np.stack([tone_48k, tone_48k], 1).reshape(-1)
+
+    class FakeStream:
+        def __init__(self):
+            self.pos = 0
+            self.calls = 0
+
+        def get_read_available(self):
+            self.calls += 1
+            if self.calls % 3 == 0:  # 가끔 아직 데이터가 없는 척
+                return 0
+            return min(300, len(tone_48k) - self.pos)
+
+        def read(self, n, exception_on_overflow=True):
+            chunk = stereo[2 * self.pos : 2 * (self.pos + n)]
+            self.pos += n
+            return chunk.tobytes()
+
+        def stop_stream(self):
+            pass
+
+        def close(self):
+            pass
+
+    stream = FakeStream()
+
+    class FakePyAudio:
+        def get_default_wasapi_loopback(self):
+            return {"name": "fake", "defaultSampleRate": rate, "maxInputChannels": 2, "index": 0}
+
+        def open(self, **kwargs):
+            return stream
+
+        def terminate(self):
+            pass
+
+    fake = types.SimpleNamespace(PyAudio=FakePyAudio, paFloat32=1)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    src = ac.LoopbackSource()
+    blocks = []
+    for block in src.blocks():
+        blocks.append(block)
+        if stream.pos >= len(tone_48k) or stream.calls > 200_000:  # 회귀 시 무한루프 방지
+            src.stop()
+    audio = np.concatenate(blocks)
+    # 2초 분량이 (블록 단위 자투리만 빼고) 모두 들어오고
+    assert len(audio) >= 2 * SAMPLE_RATE - 2 * BLOCK_SAMPLES
+    # 중간에 무음이 끼어들지 않았다 (필터 시작 구간 제외)
+    body = audio[200 : 2 * SAMPLE_RATE - BLOCK_SAMPLES]
+    rms = np.sqrt(np.convolve(body**2, np.ones(160) / 160, mode="valid"))
+    assert rms.min() > 0.2

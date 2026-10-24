@@ -7,19 +7,37 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, QPoint, QSettings, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
     QMenu,
     QSizeGrip,
-    QStyle,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
 from .config import OverlayConfig
+
+
+def _tray_icon() -> QIcon:
+    """볼륨 아이콘과 헷갈리지 않게 노란 바탕에 '字' 를 그린 아이콘."""
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#ffcc33"))
+    painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+    painter.setPen(QColor("#222222"))
+    font = QFont()
+    font.setPixelSize(44)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "字")
+    painter.end()
+    return QIcon(pixmap)
 
 
 @dataclass
@@ -123,8 +141,7 @@ class SubtitleOverlay(QWidget):
         self.tray = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
-        self.tray = QSystemTrayIcon(icon, self)
+        self.tray = QSystemTrayIcon(_tray_icon(), self)
         self.tray.setToolTip("일본어 실시간 자막")
         menu = QMenu()
         self._build_menu(menu)
