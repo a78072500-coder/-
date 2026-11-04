@@ -1,4 +1,4 @@
-# 이 파일을 config.toml 로 복사한 뒤 고쳐서 쓰세요.
+# 설정은 프로그램의 [설정] 화면에서 바꿀 수 있습니다. 이 파일을 직접 고쳐도 됩니다.
 # 적지 않은 항목은 기본값이 쓰입니다.
 
 [audio]
@@ -9,28 +9,39 @@
 device = ""
 # (macOS) 이 이름이 들어간 앱 소리만 듣습니다. 예: "maum", "BlueStacks". 비우면 모든 소리.
 app = ""
+# 내 목소리도 인식해서 대화 기록과 번역 문맥에 넣습니다. 이어폰을 꼭 쓰세요. (Windows)
+mic_enabled = false
+mic_device = ""            # 마이크 이름의 일부. 비워두면 기본 마이크
 
 [whisper]
 model = "large-v3-turbo"   # 그래픽카드 메모리가 부족하면 "medium" 또는 "small"
 device = "cuda"            # 그래픽카드가 없으면 "cpu" (맥은 자동으로 Apple GPU 사용)
 compute_type = "float16"   # cpu 라면 "int8"
 beam_size = 5
+vocabulary = []            # 자주 나오는 이름·단어. 예: ["田中", "ヨルシカ"]
+low_confidence_logprob = -0.6 # 이보다 낮으면 "잘못 들었을 수 있음" 표시. 너무 자주 뜨면 낮추세요
 
 [translator]
-engine = "deepl"           # "deepl" | "claude" | "none"(번역 안 함)
+engine = "deepl"           # 자막 번역: "deepl" | "claude" | "gemini" | "none"(번역 안 함)
+ai_engine = "auto"         # 답변·복습 AI: "auto"(키가 있는 쪽) | "claude" | "gemini"
 deepl_api_key = ""         # https://www.deepl.com/pro-api 무료 키 (끝이 :fx)
-# engine = "claude" 일 때는 ANTHROPIC_API_KEY 환경변수를 설정하세요.
+anthropic_api_key = ""     # https://console.anthropic.com 비우면 ANTHROPIC_API_KEY 환경변수를 씁니다
+gemini_api_key = ""        # https://aistudio.google.com/apikey 비우면 GEMINI_API_KEY 환경변수를 씁니다
 claude_model = "claude-opus-5-5"
+gemini_model = "gemini-3.5-flash-lite"
 context_lines = 4          # 번역할 때 참고할 직전 대화 수
 
 [segmenter]
 vad_threshold = 0.5        # 잡음이 자막으로 뜨면 올리고(0.6~0.7), 말이 안 잡히면 내리세요
-silence_end_sec = 0.6      # 이만큼 조용하면 문장 끝. 문장이 자주 끊기면 0.8~1.0 으로
-max_utterance_sec = 12.0
+# 문장 길이는 [통화] 화면의 슬라이더로 바꾸는 것이 가장 쉽습니다. 아래 값이 함께 바뀝니다.
+silence_end_sec = 0.35     # 이만큼 조용하면 문장 끝. 문장이 자주 끊기면 늘리세요
+max_utterance_sec = 6.0    # 이보다 길면 숨 고른 곳에서 나눕니다
 min_utterance_sec = 0.4
-partial_interval_sec = 1.5 # 말하는 중 회색 임시 자막 갱신 간격. 0 이면 끔
+partial_interval_sec = 1.0 # 말하는 중 회색 임시 자막 갱신 간격. 0 이면 끔
+sentence_cut = true        # 임시 자막에서 문장 끝이 보이면 쉬기를 기다리지 않고 나눕니다
 
 [overlay]
+enabled = true             # 통화 중 화면 위에 자막 창을 띄웁니다
 font_family = "Malgun Gothic"
 font_size = 20
 history_lines = 3          # 화면에 남길 이전 문장 수
@@ -39,7 +50,8 @@ width = 1000
 x = -1                     # -1 이면 마지막 위치(없으면 화면 아래 가운데)
 y = -1
 show_japanese = true
+show_reading = true        # 한자가 있는 문장에 읽는 법을 함께 표시
 
 [log]
-enabled = true             # 대화 내용을 logs/ 폴더에 txt 로 저장 (일본어 복습용)
+enabled = true             # 대화 내용을 logs/ 폴더에 저장 (기록·복습 화면에서 봅니다)
 directory = "logs"

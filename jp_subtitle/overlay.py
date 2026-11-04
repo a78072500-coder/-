@@ -8,8 +8,9 @@ import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -31,9 +32,14 @@ from PySide6.QtWidgets import (
 )
 
 from .config import OverlayConfig
+from .models import ME, Line
+from .ui.theme import JA_FONT
+
+HINT_SECONDS = 12
+_JA_CSS = "font-family:" + JA_FONT.replace('"', "'") + ";"
 
 
-def _open_path(path: Path) -> None:
+def open_path(path: Path) -> None:
     if not path.exists() and path.suffix == "":
         path.mkdir(parents=True, exist_ok=True)
     if path.is_file():
@@ -47,7 +53,7 @@ def _open_path(path: Path) -> None:
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
-def _tray_icon() -> QIcon:
+def app_icon() -> QIcon:
     """볼륨 아이콘과 헷갈리지 않게 노란 바탕에 '字' 를 그린 아이콘."""
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -70,37 +76,45 @@ def _tray_icon() -> QIcon:
 class _Line:
     ja: str = ""
     ko: str = ""
+    reading: str = ""
     final: bool = False
+    translated: bool = False
+    low_confidence: bool = False
 
 
 class SinkBridge(QObject):
     """작업 스레드에서 GUI 스레드로 결과를 넘기는 신호 묶음 (pipeline.Sink 구현)."""
 
     partial_sig = Signal(int, str)
-    final_sig = Signal(int, str)
-    translated_sig = Signal(int, str, str)
+    final_sig = Signal(object)
+    translated_sig = Signal(object)
     status_sig = Signal(str)
+    level_sig = Signal(str, float)
 
     def partial(self, uid: int, ja: str) -> None:
         self.partial_sig.emit(uid, ja)
 
-    def final(self, uid: int, ja: str) -> None:
-        self.final_sig.emit(uid, ja)
+    def final(self, line: Line) -> None:
+        self.final_sig.emit(line)
 
-    def translated(self, uid: int, ja: str, ko: str) -> None:
-        self.translated_sig.emit(uid, ja, ko)
+    def translated(self, line: Line) -> None:
+        self.translated_sig.emit(line)
 
     def status(self, text: str) -> None:
         self.status_sig.emit(text)
 
+    def level(self, speaker: str, value: float) -> None:
+        self.level_sig.emit(speaker, value)
+
 
 class SubtitleOverlay(QWidget):
+    hidden_by_user = Signal()  # 메뉴로 숨겼을 때 메인 창의 체크도 함께 끄려고
+
     def __init__(
         self,
         cfg: OverlayConfig,
         bridge: SinkBridge,
-        config_path: Path | None = None,
-        log_dir: Path | None = None,
+        open_main: Callable[[], None] | None = None,
     ):
         super().__init__(
             None,
@@ -109,8 +123,7 @@ class SubtitleOverlay(QWidget):
             | Qt.WindowType.Tool,
         )
         self.cfg = cfg
-        self.config_path = config_path
-        self.log_dir = log_dir
+        self.open_main = open_main
         # 맑은 고딕은 맥에 없으므로 기본값일 때는 맥 기본 한글 글꼴로
         self.font_family = (
             "Apple SD Gothic Neo"
@@ -119,10 +132,15 @@ class SubtitleOverlay(QWidget):
         )
         self.font_size = cfg.font_size
         self.show_japanese = cfg.show_japanese
+        self.show_reading = cfg.show_reading
         self._lines: OrderedDict[int, _Line] = OrderedDict()
-        self._status = "준비 중… (상대방이 말하면 자막이 나타납니다)"
+        self._backchannel: Line | None = None
+        self._hint: tuple[str, str, str] | None = None
+        self._status = "상대방이 말하면 자막이 나타납니다"
         self._drag_offset: QPoint | None = None
         self._settings = QSettings("jp_subtitle", "overlay")
+        self._hint_timer = QTimer(self, singleShot=True, interval=HINT_SECONDS * 1000)
+        self._hint_timer.timeout.connect(self.clear_hint)
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # 맥에서 Tool 창은 다른 앱을 누르면 숨겨지므로 항상 보이게
@@ -130,6 +148,7 @@ class SubtitleOverlay(QWidget):
         self.setWindowTitle("일본어 실시간 자막")
 
         self.label = QLabel(self)
+        self.label.setObjectName("overlayLabel")
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.TextFormat.RichText)
         self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
@@ -145,7 +164,6 @@ class SubtitleOverlay(QWidget):
         bridge.translated_sig.connect(self.on_translated)
         bridge.status_sig.connect(self.on_status)
 
-        self._init_tray()
         self._restore_geometry()
         self._render()
 
@@ -166,48 +184,36 @@ class SubtitleOverlay(QWidget):
         self._settings.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
 
-    # --- 트레이 / 메뉴 -----------------------------------------------------------
-
-    def _build_menu(self, menu: QMenu) -> None:
-        toggle_ja = QAction("일본어 원문 표시", menu, checkable=True, checked=self.show_japanese)
-        toggle_ja.toggled.connect(self._set_show_japanese)
-        menu.addAction(toggle_ja)
-        menu.addAction("글자 크게 (Ctrl+휠↑)", lambda: self._change_font(+2))
-        menu.addAction("글자 작게 (Ctrl+휠↓)", lambda: self._change_font(-2))
-        menu.addAction("기록 지우기", self._clear)
-        menu.addSeparator()
-        if self.config_path is not None:
-            menu.addAction("설정 파일 열기 (바꾼 뒤 다시 실행)", lambda: _open_path(self.config_path))
-        if self.log_dir is not None:
-            menu.addAction("대화 기록 폴더 열기", lambda: _open_path(self.log_dir))
-        menu.addAction("창 숨기기/보이기", self._toggle_visible)
-        menu.addAction("종료", QApplication.quit)
-
-    def _init_tray(self) -> None:
-        self.tray = None
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            return
-        self.tray = QSystemTrayIcon(_tray_icon(), self)
-        self.tray.setToolTip("일본어 실시간 자막")
-        menu = QMenu()
-        self._build_menu(menu)
-        self.tray.setContextMenu(menu)
-        self.tray.activated.connect(
-            lambda reason: reason == QSystemTrayIcon.ActivationReason.Trigger
-            and self._toggle_visible()
-        )
-        self.tray.show()
+    # --- 메뉴 ------------------------------------------------------------------
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
-        self._build_menu(menu)
+        if self.open_main:
+            menu.addAction("메인 창 열기", self.open_main)
+            menu.addSeparator()
+        toggle_ja = QAction("일본어 원문 표시", menu, checkable=True, checked=self.show_japanese)
+        toggle_ja.toggled.connect(self._set_show_japanese)
+        menu.addAction(toggle_ja)
+        toggle_reading = QAction("읽는 법 표시", menu, checkable=True, checked=self.show_reading)
+        toggle_reading.toggled.connect(self._set_show_reading)
+        menu.addAction(toggle_reading)
+        menu.addAction("글자 크게 (Ctrl+휠↑)", lambda: self._change_font(+2))
+        menu.addAction("글자 작게 (Ctrl+휠↓)", lambda: self._change_font(-2))
+        menu.addAction("자막 지우기", self._clear)
+        menu.addSeparator()
+        menu.addAction("자막 창 숨기기", self._hide_by_user)
         menu.exec(event.globalPos())
 
-    def _toggle_visible(self) -> None:
-        self.setVisible(not self.isVisible())
+    def _hide_by_user(self) -> None:
+        self.hide()
+        self.hidden_by_user.emit()
 
     def _set_show_japanese(self, value: bool) -> None:
         self.show_japanese = value
+        self._render()
+
+    def _set_show_reading(self, value: bool) -> None:
+        self.show_reading = value
         self._render()
 
     def _change_font(self, delta: int) -> None:
@@ -216,7 +222,16 @@ class SubtitleOverlay(QWidget):
 
     def _clear(self) -> None:
         self._lines.clear()
+        self._backchannel = None
         self._render()
+
+    def apply_config(self, cfg: OverlayConfig) -> None:
+        self.cfg = cfg
+        self.font_size = cfg.font_size
+        self.show_japanese = cfg.show_japanese
+        self.show_reading = cfg.show_reading
+        self._render()
+        self.update()
 
     # --- 마우스: 드래그 이동, Ctrl+휠 글자 크기 ------------------------------------
 
@@ -265,22 +280,42 @@ class SubtitleOverlay(QWidget):
         self._status = ""
         self._render()
 
-    def on_final(self, uid: int, ja: str) -> None:
-        line = self._line(uid)
-        line.ja, line.final = ja, True
+    def on_final(self, line: Line) -> None:
+        if line.speaker == ME:
+            return
         self._status = ""
+        if line.backchannel:
+            # 맞장구는 앞 문장을 밀어내지 않고 맨 아래 한 줄에만 잠깐 보여 준다
+            self._lines.pop(line.uid, None)
+            self._backchannel = line
+        else:
+            item = self._line(line.uid)
+            item.ja, item.reading, item.final = line.ja, line.reading, True
+            item.low_confidence = line.low_confidence
+            self._backchannel = None
         self._render()
 
-    def on_translated(self, uid: int, ja: str, ko: str) -> None:
-        if uid in self._lines:
-            self._lines[uid].ko = ko or "(번역 실패)"
+    def on_translated(self, line: Line) -> None:
+        if line.speaker == ME or line.backchannel:
+            return
+        item = self._lines.get(line.uid)
+        if item is not None:
+            item.ko, item.translated = line.ko, True
             self._render()
 
     def on_status(self, text: str) -> None:
         self._status = text
         self._render()
-        if self.tray:
-            self.tray.showMessage("일본어 실시간 자막", text)
+
+    def show_hint(self, ja: str, reading: str, korean: str) -> None:
+        """단축키로 꺼낸 문구를 자막 위쪽에 잠깐 크게 보여 준다."""
+        self._hint = (ja, reading, korean)
+        self._hint_timer.start()
+        self._render()
+
+    def clear_hint(self) -> None:
+        self._hint = None
+        self._render()
 
     def _render(self) -> None:
         fs = self.font_size
@@ -288,6 +323,20 @@ class SubtitleOverlay(QWidget):
         self.label.setFont(font)
         family = html.escape(self.font_family)
         parts: list[str] = []
+        if self._hint:
+            ja, reading, korean = self._hint
+            parts.append(
+                f'<div style="color:#8fe3b0;font-size:{fs}px;font-weight:600;{_JA_CSS}">{html.escape(ja)}</div>'
+            )
+            if reading:
+                parts.append(
+                    f'<div style="color:#b8e8cb;font-size:{int(fs * 0.7)}px;{_JA_CSS}">{html.escape(reading)}</div>'
+                )
+            if korean:
+                parts.append(
+                    f'<div style="color:#9fb5a8;font-size:{int(fs * 0.7)}px;">{html.escape(korean)}</div>'
+                )
+            parts.append('<div style="font-size:8px">&nbsp;</div>')
         items = list(self._lines.values())
         for i, line in enumerate(items):
             # Qt 리치텍스트는 opacity 를 지원하지 않아 이전 줄은 어두운 색으로 표시한다
@@ -297,22 +346,36 @@ class SubtitleOverlay(QWidget):
                     color, style = "#9a9a9a", "font-style:italic;"
                 else:
                     color, style = ("#ffffff" if latest else "#8c8c8c"), ""
+                mark = (
+                    '<span style="color:#ffb454;font-weight:600;"> ? 잘못 들었을 수 있어요</span>'
+                    if line.low_confidence else ""
+                )
                 parts.append(
                     f'<div style="color:{color};font-size:{int(fs * 0.8)}px;{style}">'
-                    f"{html.escape(line.ja)}</div>"
+                    f'<span style="{_JA_CSS}">{html.escape(line.ja)}</span>{mark}</div>'
                 )
+                if self.show_reading and line.reading:
+                    parts.append(
+                        f'<div style="color:{"#b9b9b9" if latest else "#777"};{_JA_CSS}'
+                        f'font-size:{int(fs * 0.62)}px;">{html.escape(line.reading)}</div>'
+                    )
             if line.ko:
                 color = "#ffe066" if latest else "#a8964a"
                 parts.append(
                     f'<div style="color:{color};font-size:{fs}px;font-weight:600;">'
                     f"{html.escape(line.ko)}</div>"
                 )
-            elif line.final:
+            elif line.final and not line.translated:
                 parts.append(
                     f'<div style="color:#777;font-size:{int(fs * 0.7)}px;">번역 중…</div>'
                 )
             if not latest:
                 parts.append('<div style="font-size:6px">&nbsp;</div>')
+        if self._backchannel:
+            parts.append(
+                f'<div style="color:#8a8a8a;font-size:{int(fs * 0.7)}px;">'
+                f"{html.escape(self._backchannel.ja)} · {html.escape(self._backchannel.ko)}</div>"
+            )
         if self._status:
             parts.append(
                 f'<div style="color:#8fd3ff;font-size:{int(fs * 0.7)}px">'

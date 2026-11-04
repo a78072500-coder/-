@@ -12,6 +12,7 @@ macOS:   dist/jp_subtitle-mac.zip (jp_subtitle.app + 사용법.txt)
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import site
 import subprocess
@@ -22,18 +23,34 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist" / "jp_subtitle"
 
 USAGE = """\
-일본어 실시간 자막 + 한국어 번역
-================================
+일본어 통화 도우미
+==================
 
-1. config.toml 을 메모장으로 열어 deepl_api_key 에 DeepL 무료 API 키를 넣습니다.
-   (키가 없으면 일본어 자막만 나옵니다)
-2. jp_subtitle.exe 를 더블클릭합니다.
+1. jp_subtitle.exe 를 더블클릭합니다.
+   jp_subtitle.exe 와 _internal 폴더는 꼭 같은 폴더에 두세요. 옮길 때는 폴더째 옮기세요.
    처음 한 번은 음성인식 모델(약 1.6GB)을 내려받느라 몇 분 걸립니다.
-3. 화면 아래 자막 창이 뜨면 블루스택에서 통화를 시작하세요. (이어폰 사용 권장)
+2. [설정] 화면에서 API 키를 넣습니다.
+   - DeepL 무료 키: 자막 번역과 한국어를 일본어로 바꾸기
+   - Claude 또는 Gemini 키: 추천 답변과 AI 복습 (자막 번역에도 쓸 수 있습니다)
+   키가 없어도 일본어 자막, 읽는 법, 되묻기 문구, 복습 카드는 쓸 수 있습니다.
+3. [통화] 화면에서 [통화 시작]을 누르고 블루스택에서 통화하세요. (이어폰 권장)
+   문장이 너무 길거나 자주 끊기면 위쪽 [문장 길이] 슬라이더를 움직이세요. 통화 중에도 바로 적용됩니다.
 
-- 자막 창 드래그: 이동 / Ctrl+휠: 글자 크기 / 우클릭: 메뉴(종료 등)
-- 대화 기록은 logs 폴더에 저장됩니다.
-- 자세한 설명: https://github.com/a78072500-coder/-
+화면
+- 통화: 실시간 자막, 하고 싶은 말을 일본어로 바꾸기, 추천 답변, 되묻기 문구
+- 기록: 지난 통화 다시 보기, AI 복습 만들기, 기록 삭제
+- 복습: 저장한 문장을 카드로 익히기, Anki 로 내보내기
+- 진단: 자막이 왜 늦는지 구간별 시간 보기
+- 설정: API 키, 음성인식, 소리 장치, 자주 나오는 단어
+
+단축키 (블루스택을 보고 있을 때도 동작합니다)
+- Ctrl+Alt+R: 메인 창을 띄우고 하고 싶은 말 입력
+- Ctrl+Alt+Q: 되묻기 문구를 자막 창에 하나씩 표시
+- Ctrl+Alt+S: 추천 답변 만들기
+
+자막 창: 드래그로 이동 / Ctrl+휠로 글자 크기 / 우클릭으로 메뉴
+대화 기록은 logs 폴더에 저장됩니다.
+자세한 설명: https://github.com/a78072500-coder/-
 """
 
 
@@ -49,16 +66,27 @@ def nvidia_binaries() -> list[str]:
 
 
 USAGE_MAC = """\
-일본어 실시간 자막 + 한국어 번역 (macOS)
-=======================================
+일본어 통화 도우미 (macOS, Apple Silicon)
+=========================================
 
 1. jp_subtitle.app 을 실행합니다.
    - "확인되지 않은 개발자" 경고가 뜨면: 시스템 설정 → 개인정보 보호 및 보안 → 아래쪽 "그래도 열기"
-2. 처음 실행하면 '화면 및 시스템 오디오 녹음' 권한을 묻습니다. 허용한 뒤 앱을 다시 실행하세요.
+2. [설정] 화면에서 API 키를 넣습니다. 키가 없어도 일본어 자막과 복습 카드는 쓸 수 있습니다.
+   - 통화 앱 소리만 듣고 싶으면 [상대방 소리]에 앱 이름 일부를 적으세요. 예: maum
+3. 처음 한 번은 음성인식 모델(약 1.6GB)을 내려받느라 몇 분 걸립니다.
+4. [통화] 화면에서 [통화 시작]을 누르세요.
+   처음이면 '화면 및 시스템 오디오 녹음' 권한을 묻습니다. 허용한 뒤 앱을 다시 실행하세요.
    (다른 앱의 소리를 듣기 위해 필요합니다. 화면은 녹화하지 않습니다)
-3. 자막 창 우클릭 → "설정 파일 열기" 에서 deepl_api_key 를 넣고 앱을 다시 실행합니다.
-   - maum 소리만 듣고 싶으면 [audio] app = "maum" 처럼 앱 이름 일부를 적으세요.
-4. 처음 한 번은 음성인식 모델(약 1.6GB)을 내려받느라 몇 분 걸립니다.
+   앱을 새 버전으로 바꾸면 권한을 다시 허용해야 할 수 있습니다.
+5. 문장이 너무 길거나 자주 끊기면 위쪽 [문장 길이] 슬라이더를 움직이세요. 통화 중에도 바로 적용됩니다.
+
+단축키 (다른 앱을 보고 있을 때도 동작합니다)
+- Control+Option+R: 메인 창을 띄우고 하고 싶은 말 입력
+- Control+Option+Q: 되묻기 문구를 자막 창에 하나씩 표시
+- Control+Option+S: 추천 답변 만들기
+
+Windows 에서 쓰던 키와 기록을 옮기려면 config.toml 과 logs 폴더를
+~/Library/Application Support/jp_subtitle 에 복사하세요.
 
 - 자막 창 드래그: 이동 / Ctrl+휠: 글자 크기 / 우클릭: 메뉴
 - 설정·대화 기록·로그: ~/Library/Application Support/jp_subtitle
@@ -84,9 +112,22 @@ def build_mac_helper() -> Path:
     return helper
 
 
+def patch_info_plist(path: Path) -> None:
+    """마이크 사용 이유가 없으면 macOS 가 권한을 묻지도 않고 앱을 끝내 버린다."""
+    with path.open("rb") as f:
+        info = plistlib.load(f)
+    info["NSMicrophoneUsageDescription"] = "내 목소리를 대화 기록과 번역 문맥에 넣을 때 마이크를 사용합니다."
+    info["CFBundleDisplayName"] = "일본어 통화 도우미"
+    with path.open("wb") as f:
+        plistlib.dump(info, f)
+
+
 def main_mac() -> int:
     helper = build_mac_helper()
-    collect = ["faster_whisper", "ctranslate2", "onnxruntime"]
+    collect = [
+        "faster_whisper", "ctranslate2", "onnxruntime", "janome", "google.genai",
+        "sounddevice", "_sounddevice_data",
+    ]
     try:
         import mlx_whisper  # noqa: F401  (Apple Silicon 에서만 설치됨)
 
@@ -110,11 +151,16 @@ def main_mac() -> int:
     ]
     subprocess.run(cmd, check=True, cwd=ROOT)
 
+    app = ROOT / "dist" / "jp_subtitle.app"
+    patch_info_plist(app / "Contents" / "Info.plist")
+    # Info.plist 를 고치면 서명이 깨지므로 다시 서명한다 (Apple Silicon 은 서명 없는 앱을 실행하지 않는다)
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+
     package = ROOT / "dist" / "jp_subtitle-mac"
     shutil.rmtree(package, ignore_errors=True)
     package.mkdir()
     # 심볼릭 링크와 서명을 보존하려고 ditto 로 복사/압축한다
-    subprocess.run(["ditto", str(ROOT / "dist" / "jp_subtitle.app"), str(package / "jp_subtitle.app")], check=True)
+    subprocess.run(["ditto", str(app), str(package / "jp_subtitle.app")], check=True)
     (package / "사용법.txt").write_text(USAGE_MAC, encoding="utf-8")
     archive = ROOT / "dist" / "jp_subtitle-mac.zip"
     archive.unlink(missing_ok=True)
@@ -136,6 +182,9 @@ def main() -> int:
         "--collect-all", "ctranslate2",
         "--collect-all", "onnxruntime",
         "--collect-all", "pyaudiowpatch",
+        "--collect-all", "janome",
+        # Gemini SDK 는 모듈 일부를 실행 중에 불러와서 빌드 도구가 자동으로 찾지 못한다
+        "--collect-all", "google.genai",
         *nvidia,
         str(ROOT / "run.py"),
     ]

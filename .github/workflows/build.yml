@@ -112,6 +112,14 @@ jobs:
       - name: End-to-end check on CPU (app)
         run: python scripts/smoke_test.py check ja.wav -- dist/jp_subtitle.app/Contents/MacOS/jp_subtitle
 
+      - name: Microphone library works in the app
+        run: dist/jp_subtitle.app/Contents/MacOS/jp_subtitle --list-mics
+
+      - name: App has a valid signature and microphone permission text
+        run: |
+          codesign --verify --deep --strict dist/jp_subtitle.app
+          plutil -extract NSMicrophoneUsageDescription raw dist/jp_subtitle.app/Contents/Info.plist
+
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:

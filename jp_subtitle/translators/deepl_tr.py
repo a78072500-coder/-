@@ -8,7 +8,7 @@ class DeepLTranslator(Translator):
         import deepl
 
         if not api_key:
-            raise ValueError("config.toml 의 [translator] deepl_api_key 를 입력하세요.")
+            raise ValueError("DeepL 키가 없어요. 설정 화면에서 넣어 주세요 (deepl_api_key).")
         self._client = deepl.Translator(api_key)
 
     def translate(self, ja: str, history: list[tuple[str, str]]) -> str:

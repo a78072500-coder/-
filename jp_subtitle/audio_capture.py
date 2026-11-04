@@ -229,6 +229,147 @@ class LoopbackSource:
             p.terminate()
 
 
+def list_input_devices() -> list[dict]:
+    """마이크 목록. 항목마다 "name" 이 있다."""
+    if sys.platform == "darwin":
+        import sounddevice
+
+        return [dict(d) for d in sounddevice.query_devices() if d["max_input_channels"] > 0]
+    _require_windows()
+    import pyaudiowpatch as pyaudio
+
+    p = pyaudio.PyAudio()
+    try:
+        wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
+        devices = (p.get_device_info_by_index(i) for i in range(p.get_device_count()))
+        return [
+            d for d in devices
+            if d["hostApi"] == wasapi and d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")
+        ]
+    finally:
+        p.terminate()
+
+
+class MicSource:
+    """내 목소리를 마이크에서 받는다."""
+
+    def __init__(self, device_name: str = "") -> None:
+        _require_windows()
+        self.device_name = device_name
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _find_device(self, p, pyaudio) -> dict:
+        wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        if not self.device_name:
+            return p.get_device_info_by_index(wasapi["defaultInputDevice"])
+        wanted = self.device_name.lower()
+        for i in range(p.get_device_count()):
+            dev = p.get_device_info_by_index(i)
+            if (
+                dev["hostApi"] == wasapi["index"]
+                and dev["maxInputChannels"] > 0
+                and not dev.get("isLoopbackDevice")
+                and wanted in dev["name"].lower()
+            ):
+                return dev
+        raise RuntimeError(f"'{self.device_name}' 마이크를 찾지 못했습니다.")
+
+    def blocks(self) -> Iterator[np.ndarray]:
+        import pyaudiowpatch as pyaudio
+
+        p = pyaudio.PyAudio()
+        stream = None
+        try:
+            dev = self._find_device(p, pyaudio)
+            rate = int(dev["defaultSampleRate"])
+            channels = int(dev["maxInputChannels"])
+            stream = p.open(
+                format=pyaudio.paFloat32,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=dev["index"],
+                frames_per_buffer=rate // 50,
+            )
+            print(f"[마이크] {dev['name']} ({rate}Hz, {channels}ch)")
+            resampler = StreamResampler(rate, channels)
+            rechunker = _Rechunker()
+            while not self._stop.is_set():
+                available = stream.get_read_available()
+                if available > 0:
+                    raw = stream.read(available, exception_on_overflow=False)
+                    audio = resampler.process(np.frombuffer(raw, dtype=np.float32))
+                    yield from rechunker.feed(audio)
+                else:
+                    time.sleep(0.005)
+        finally:
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
+            p.terminate()
+
+
+class MacMicSource:
+    """macOS 에서 내 목소리를 마이크로 받는다. 처음 쓸 때 macOS 가 마이크 권한을 묻는다."""
+
+    def __init__(self, device_name: str = "") -> None:
+        self.device_name = device_name
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _find_device(self, sounddevice) -> int | None:
+        if not self.device_name:
+            return None  # 기본 마이크
+        wanted = self.device_name.lower()
+        for index, dev in enumerate(sounddevice.query_devices()):
+            if dev["max_input_channels"] > 0 and wanted in dev["name"].lower():
+                return index
+        raise RuntimeError(f"'{self.device_name}' 마이크를 찾지 못했습니다.")
+
+    def blocks(self) -> Iterator[np.ndarray]:
+        import sounddevice
+
+        device = self._find_device(sounddevice)
+        info = sounddevice.query_devices(device, "input")
+        rate = int(info["default_samplerate"])
+        chunks: queue.Queue[np.ndarray] = queue.Queue()
+
+        def on_audio(indata, frames, time_info, status) -> None:
+            chunks.put(indata.copy().reshape(-1))
+
+        with sounddevice.InputStream(
+            device=device,
+            channels=1,
+            samplerate=rate,
+            dtype="float32",
+            blocksize=rate // 50,  # 20ms
+            callback=on_audio,
+        ):
+            print(f"[마이크] {info['name']} ({rate}Hz)")
+            resampler = StreamResampler(rate, 1)
+            rechunker = _Rechunker()
+            while not self._stop.is_set():
+                try:
+                    data = chunks.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                yield from rechunker.feed(resampler.process(data))
+
+
+def create_mic_source(device_name: str = ""):
+    """이 컴퓨터에서 쓸 수 있는 마이크 입력. 지원하지 않는 운영체제면 None."""
+    if sys.platform == "win32":
+        return MicSource(device_name)
+    if sys.platform == "darwin":
+        return MacMicSource(device_name)
+    return None
+
+
 MAC_PERMISSION_HELP = (
     "시스템 오디오를 들으려면 권한이 필요합니다: 시스템 설정 → 개인정보 보호 및 보안 → "
     "'화면 및 시스템 오디오 녹음' 에서 jp_subtitle 을 켜고 프로그램을 다시 실행하세요."

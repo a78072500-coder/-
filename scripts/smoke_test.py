@@ -46,8 +46,20 @@ async def _tts(text: str, path: Path) -> None:
     await edge_tts.Communicate(text, "ja-JP-NanamiNeural").save(str(path))
 
 
+def decode_audio(path: Path) -> np.ndarray:
+    """mp3 를 16kHz 모노로 읽는다. (faster_whisper.decode_audio 는 최신 av 와 맞지 않는다)"""
+    import av
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    pieces = []
+    with av.open(str(path)) as container:
+        for frame in container.decode(audio=0):
+            pieces += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
+        pieces += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]
+    return np.concatenate(pieces).astype(np.float32) / 32768.0
+
+
 def make_wav(out: Path) -> None:
-    from faster_whisper import decode_audio
     from scipy.io import wavfile
 
     pieces = [np.zeros(8000, dtype=np.float32)]
@@ -55,7 +67,7 @@ def make_wav(out: Path) -> None:
         for i, text in enumerate(SENTENCES):
             mp3 = Path(tmp) / f"{i}.mp3"
             asyncio.run(_tts(text, mp3))
-            pieces += [decode_audio(str(mp3), sampling_rate=16000), np.zeros(24000, np.float32)]
+            pieces += [decode_audio(mp3), np.zeros(24000, np.float32)]
     audio = np.concatenate(pieces)
     wavfile.write(out, 16000, (audio * 32767).astype(np.int16))
     print(f"{out}: {len(audio) / 16000:.1f}초")
@@ -81,6 +93,9 @@ def check(wav: Path, command: list[str], device: str) -> int:
     missing = [w for w in EXPECTED if w not in recognized]
     if proc.returncode != 0 or missing:
         print(f"실패: 종료코드 {proc.returncode}, 인식되지 않은 단어 {missing}")
+        return 1
+    if "[읽기]" not in out:
+        print("실패: 읽는 법이 나오지 않았습니다 (janome 이 빌드에 포함됐는지 확인)")
         return 1
     if device == "cuda" and "CPU 로 실행 중" not in out:
         print("실패: GPU 가 없는데 CPU 전환 안내가 나오지 않았습니다")

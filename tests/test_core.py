@@ -7,6 +7,7 @@ import pytest
 
 from jp_subtitle.audio_capture import BLOCK_SAMPLES, SAMPLE_RATE, to_mono_16k
 from jp_subtitle.config import Config, SegmenterConfig, load_config
+from jp_subtitle.models import Transcript
 from jp_subtitle.pipeline import ConversationLog, Pipeline
 from jp_subtitle.segmenter import Segmenter, energy_speech_prob
 from jp_subtitle.transcriber import is_hallucination
@@ -155,14 +156,17 @@ class RecordingSink:
     def partial(self, uid, ja):
         self.events.append(("partial", uid, ja))
 
-    def final(self, uid, ja):
-        self.events.append(("final", uid, ja))
+    def final(self, line):
+        self.events.append(("final", line.uid, line.ja))
 
-    def translated(self, uid, ja, ko):
-        self.events.append(("translated", uid, ja, ko))
+    def translated(self, line):
+        self.events.append(("translated", line.uid, line.ja, line.ko))
 
     def status(self, text):
         self.events.append(("status", text))
+
+    def level(self, speaker, value):
+        pass
 
 
 class EchoTranslator(Translator):
@@ -181,7 +185,7 @@ def test_pipeline_end_to_end(tmp_path):
     translator = EchoTranslator()
     sink = RecordingSink()
     log = ConversationLog(tmp_path)
-    p = Pipeline(FakeSource(blocks), seg, lambda a, final: next(texts), translator, sink, 4, log)
+    p = Pipeline(FakeSource(blocks), seg, lambda a, final: Transcript(next(texts)), translator, sink, 4, log)
     p.start()
     assert p.wait(10)
 
@@ -203,7 +207,7 @@ def test_pipeline_survives_translator_error():
 
     seg = Segmenter(SegmenterConfig(partial_interval_sec=0), energy_speech_prob)
     sink = RecordingSink()
-    p = Pipeline(FakeSource(tone(1.0) + silence(1.0)), seg, lambda a, f: "テスト", Broken(), sink)
+    p = Pipeline(FakeSource(tone(1.0) + silence(1.0)), seg, lambda a, f: Transcript("テスト"), Broken(), sink)
     p.start()
     assert p.wait(10)
     assert ("final", 0, "テスト") in sink.events
@@ -219,7 +223,7 @@ def test_pipeline_drops_stale_partials():
     def slow_transcribe(audio, final):
         calls.append(final)
         time.sleep(0.05)
-        return "テスト"
+        return Transcript("テスト")
 
     sink = RecordingSink()
     blocks = (tone(3.0) + silence(1.0)) * 2
@@ -247,7 +251,7 @@ def test_main_with_wav_file(tmp_path, monkeypatch, capsys):
 
         def transcribe(self, audio, beam_size=None):
             self.n += 1
-            return f"文{self.n}"
+            return Transcript(f"文{self.n}")
 
     # 플랫폼별 선택(맥이면 MLX)을 거치지 않도록 선택 함수 자체를 바꾼다
     monkeypatch.setattr(transcriber_mod, "create_transcriber", StubTranscriber)
