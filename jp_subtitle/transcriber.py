@@ -193,17 +193,6 @@ def mlx_repo(model: str) -> str:
     return model if "/" in model else MLX_MODELS.get(model, f"mlx-community/whisper-{model}-mlx")
 
 
-def _prepare_mlx_thread() -> None:
-    """이 스레드 전용 GPU 스트림을 만든다. 이런 기능이 없는 예전 MLX 에서는 할 일이 없다."""
-    try:
-        import mlx.core as mx
-    except ImportError:
-        return
-    make_stream = getattr(mx, "new_thread_local_stream", None)
-    if make_stream is not None:
-        mx.set_default_stream(make_stream(mx.gpu))
-
-
 class MLXTranscriber:
     """Apple GPU(Metal) 로 Whisper 를 돌린다. 빔 서치가 없어 항상 greedy 디코딩.
 
@@ -213,9 +202,7 @@ class MLXTranscriber:
     """
 
     def __init__(self, cfg: WhisperConfig):
-        self._worker = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="mlx", initializer=_prepare_mlx_thread
-        )
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
 
         def load() -> None:
             import mlx_whisper
